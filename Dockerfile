@@ -1,11 +1,10 @@
 FROM node:20-alpine AS base
 WORKDIR /app
-ENV NODE_ENV=production
 
 FROM base AS dependencies
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 FROM base AS dev-dependencies
 RUN apk add --no-cache python3 make g++
@@ -20,8 +19,9 @@ RUN npm run build
 FROM base AS runtime
 ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY --chown=node:node dist ./dist
+COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
+RUN mkdir -p uploads && chown node:node uploads
 
 USER node
 EXPOSE 4000

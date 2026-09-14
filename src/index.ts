@@ -3,7 +3,7 @@ import express from "express";
 import { createYoga } from "graphql-yoga";
 
 import { config } from "./config/env.js";
-import { connectToDatabase } from "./db/connection.js";
+import { connectToDatabase, isDatabaseConnected } from "./db/connection.js";
 import { schema } from "./graphql/schema.js";
 
 async function main() {
@@ -24,6 +24,15 @@ async function main() {
 
   app.get("/", (_req, res) => {
     res.json({ status: "ok", environment: config.nodeEnv });
+  });
+
+  app.get("/health", (_req, res) => {
+    const databaseConnected = isDatabaseConnected();
+    res.status(databaseConnected ? 200 : 503).json({
+      status: databaseConnected ? "ok" : "unavailable",
+      environment: config.nodeEnv,
+      databaseConnected,
+    });
   });
 
   app.listen(config.port, () => {

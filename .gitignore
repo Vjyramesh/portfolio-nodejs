@@ -3,6 +3,5 @@ dist/
 coverage/
 uploads/
 .env
-.env.production
 .DS_Store
 *.log

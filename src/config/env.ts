@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import dotenv from "dotenv";
 
 const nodeEnv = process.env.NODE_ENV ?? "development";
@@ -15,5 +13,4 @@ export const config = {
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean),
-  uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? "uploads"),
 };

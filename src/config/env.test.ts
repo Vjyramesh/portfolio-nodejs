@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
 
 const mockDotenvConfig = jest.fn();
@@ -27,7 +25,6 @@ describe("config", () => {
     delete process.env.MONGODB_URI;
     delete process.env.MONGODB_DB_NAME;
     delete process.env.CORS_ORIGINS;
-    delete process.env.UPLOADS_DIR;
 
     const { config } = await import("./env.js");
 
@@ -39,7 +36,6 @@ describe("config", () => {
       mongoUri: "mongodb://localhost:27017",
       mongoDbName: "portfolio_dev",
       corsOrigins: ["http://localhost:3000"],
-      uploadsDir: path.resolve("uploads"),
     });
   });
 
@@ -49,7 +45,6 @@ describe("config", () => {
     process.env.MONGODB_URI = "mongodb://custom-host:27017";
     process.env.MONGODB_DB_NAME = "portfolio_prod";
     process.env.CORS_ORIGINS = "https://a.com, https://b.com";
-    process.env.UPLOADS_DIR = "custom-uploads";
 
     const { config } = await import("./env.js");
 
@@ -61,7 +56,6 @@ describe("config", () => {
       mongoUri: "mongodb://custom-host:27017",
       mongoDbName: "portfolio_prod",
       corsOrigins: ["https://a.com", "https://b.com"],
-      uploadsDir: path.resolve("custom-uploads"),
     });
   });
 

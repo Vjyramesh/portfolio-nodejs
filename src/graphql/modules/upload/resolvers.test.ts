@@ -1,22 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, jest } from "@jest/globals";
 
-const mockRandomUUID = jest.fn<() => string>();
-const mockMkdir = jest.fn<(dir: string, opts: unknown) => Promise<void>>();
-const mockWriteFile = jest.fn<(file: string, data: Buffer) => Promise<void>>();
-const mockUnlink = jest.fn<(file: string) => Promise<void>>();
+const mockPut = jest.fn<(pathname: string, body: Buffer, opts: unknown) => Promise<{ url: string }>>();
+const mockDel = jest.fn<(url: string) => Promise<void>>();
 
-jest.unstable_mockModule("../../../config/env.js", () => ({
-  config: { uploadsDir: "/tmp/uploads" },
-}));
-
-jest.unstable_mockModule("node:crypto", () => ({
-  randomUUID: mockRandomUUID,
-}));
-
-jest.unstable_mockModule("node:fs/promises", () => ({
-  mkdir: mockMkdir,
-  writeFile: mockWriteFile,
-  unlink: mockUnlink,
+jest.unstable_mockModule("@vercel/blob", () => ({
+  put: mockPut,
+  del: mockDel,
 }));
 
 let uploadResolvers: (typeof import("./resolvers.js"))["uploadResolvers"];
@@ -30,25 +19,22 @@ afterEach(() => {
 });
 
 describe("uploadResolvers", () => {
-  it("Mutation.uploadImage writes the file to the uploads dir and returns its URL", async () => {
+  it("Mutation.uploadImage uploads the file to blob storage and returns its URL", async () => {
     const file = {
       name: "photo.png",
       arrayBuffer: jest
         .fn<() => Promise<ArrayBuffer>>()
         .mockResolvedValue(new TextEncoder().encode("data").buffer),
     };
-    mockRandomUUID.mockReturnValue("uuid-1234");
-    mockMkdir.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+    mockPut.mockResolvedValue({ url: "https://blob.example.com/photo-abc123.png" });
 
     const result = await uploadResolvers.Mutation.uploadImage(undefined, { file });
 
-    expect(mockMkdir).toHaveBeenCalledWith("/tmp/uploads", { recursive: true });
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      "/tmp/uploads/uuid-1234-photo.png",
-      Buffer.from(new TextEncoder().encode("data")),
-    );
-    expect(result).toBe("/uploads/uuid-1234-photo.png");
+    expect(mockPut).toHaveBeenCalledWith("photo.png", Buffer.from(new TextEncoder().encode("data")), {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    expect(result).toBe("https://blob.example.com/photo-abc123.png");
   });
 
   it("Mutation.uploadImage sanitizes unsafe characters in the file name", async () => {
@@ -56,61 +42,40 @@ describe("uploadResolvers", () => {
       name: "my photo (1).png",
       arrayBuffer: jest.fn<() => Promise<ArrayBuffer>>().mockResolvedValue(new ArrayBuffer(0)),
     };
-    mockRandomUUID.mockReturnValue("uuid-5678");
-    mockMkdir.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+    mockPut.mockResolvedValue({ url: "https://blob.example.com/my_photo__1_-abc123.png" });
 
-    const result = await uploadResolvers.Mutation.uploadImage(undefined, { file });
+    await uploadResolvers.Mutation.uploadImage(undefined, { file });
 
-    expect(result).toBe("/uploads/uuid-5678-my_photo__1_.png");
+    expect(mockPut).toHaveBeenCalledWith(
+      "my_photo__1_.png",
+      Buffer.from(new ArrayBuffer(0)),
+      expect.anything(),
+    );
   });
 
-  it("Mutation.deleteImage removes the file from the uploads dir and returns true", async () => {
-    mockUnlink.mockResolvedValue(undefined);
+  it("Mutation.deleteImage removes the blob and returns true", async () => {
+    mockDel.mockResolvedValue(undefined);
 
     const result = await uploadResolvers.Mutation.deleteImage(undefined, {
-      url: "/uploads/uuid-1234-photo.png",
+      url: "https://blob.example.com/photo-abc123.png",
     });
 
-    expect(mockUnlink).toHaveBeenCalledWith("/tmp/uploads/uuid-1234-photo.png");
+    expect(mockDel).toHaveBeenCalledWith("https://blob.example.com/photo-abc123.png");
     expect(result).toBe(true);
   });
 
-  it("Mutation.deleteImage strips directory segments from the url to stay inside the uploads dir", async () => {
-    mockUnlink.mockResolvedValue(undefined);
-
-    await uploadResolvers.Mutation.deleteImage(undefined, {
-      url: "/uploads/../../etc/passwd",
-    });
-
-    expect(mockUnlink).toHaveBeenCalledWith("/tmp/uploads/passwd");
-  });
-
-  it("Mutation.deleteImage returns false when the file does not exist", async () => {
-    const enoent = Object.assign(new Error("not found"), { code: "ENOENT" });
-    mockUnlink.mockRejectedValue(enoent);
-
-    const result = await uploadResolvers.Mutation.deleteImage(undefined, {
-      url: "/uploads/missing.png",
-    });
-
-    expect(result).toBe(false);
-  });
-
-  it("Mutation.deleteImage rethrows unexpected errors", async () => {
-    const error = new Error("disk exploded");
-    mockUnlink.mockRejectedValue(error);
+  it("Mutation.deleteImage propagates unexpected errors", async () => {
+    const error = new Error("network error");
+    mockDel.mockRejectedValue(error);
 
     await expect(
-      uploadResolvers.Mutation.deleteImage(undefined, { url: "/uploads/photo.png" }),
-    ).rejects.toThrow("disk exploded");
+      uploadResolvers.Mutation.deleteImage(undefined, { url: "https://blob.example.com/photo.png" }),
+    ).rejects.toThrow("network error");
   });
 
-  it("Mutation.updateImage deletes the old file and writes the new one, returning its URL", async () => {
-    mockUnlink.mockResolvedValue(undefined);
-    mockRandomUUID.mockReturnValue("uuid-9999");
-    mockMkdir.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+  it("Mutation.updateImage deletes the old blob and uploads the new one, returning its URL", async () => {
+    mockDel.mockResolvedValue(undefined);
+    mockPut.mockResolvedValue({ url: "https://blob.example.com/new-photo-xyz789.png" });
 
     const file = {
       name: "new-photo.png",
@@ -120,41 +85,22 @@ describe("uploadResolvers", () => {
     };
 
     const result = await uploadResolvers.Mutation.updateImage(undefined, {
-      oldUrl: "/uploads/uuid-1234-old-photo.png",
+      oldUrl: "https://blob.example.com/old-photo-abc123.png",
       file,
     });
 
-    expect(mockUnlink).toHaveBeenCalledWith("/tmp/uploads/uuid-1234-old-photo.png");
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      "/tmp/uploads/uuid-9999-new-photo.png",
+    expect(mockDel).toHaveBeenCalledWith("https://blob.example.com/old-photo-abc123.png");
+    expect(mockPut).toHaveBeenCalledWith(
+      "new-photo.png",
       Buffer.from(new TextEncoder().encode("data")),
+      { access: "public", addRandomSuffix: true },
     );
-    expect(result).toBe("/uploads/uuid-9999-new-photo.png");
+    expect(result).toBe("https://blob.example.com/new-photo-xyz789.png");
   });
 
-  it("Mutation.updateImage still saves the new file when the old one is already gone", async () => {
-    const enoent = Object.assign(new Error("not found"), { code: "ENOENT" });
-    mockUnlink.mockRejectedValue(enoent);
-    mockRandomUUID.mockReturnValue("uuid-9999");
-    mockMkdir.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
-
-    const file = {
-      name: "new-photo.png",
-      arrayBuffer: jest.fn<() => Promise<ArrayBuffer>>().mockResolvedValue(new ArrayBuffer(0)),
-    };
-
-    const result = await uploadResolvers.Mutation.updateImage(undefined, {
-      oldUrl: "/uploads/missing.png",
-      file,
-    });
-
-    expect(result).toBe("/uploads/uuid-9999-new-photo.png");
-  });
-
-  it("Mutation.updateImage propagates unexpected delete errors without saving the new file", async () => {
-    const error = new Error("disk exploded");
-    mockUnlink.mockRejectedValue(error);
+  it("Mutation.updateImage propagates unexpected delete errors without uploading the new file", async () => {
+    const error = new Error("network error");
+    mockDel.mockRejectedValue(error);
     const file = {
       name: "new-photo.png",
       arrayBuffer: jest.fn<() => Promise<ArrayBuffer>>().mockResolvedValue(new ArrayBuffer(0)),
@@ -162,12 +108,12 @@ describe("uploadResolvers", () => {
 
     await expect(
       uploadResolvers.Mutation.updateImage(undefined, {
-        oldUrl: "/uploads/old-photo.png",
+        oldUrl: "https://blob.example.com/old-photo.png",
         file,
       }),
-    ).rejects.toThrow("disk exploded");
+    ).rejects.toThrow("network error");
 
-    expect(mockWriteFile).not.toHaveBeenCalled();
+    expect(mockPut).not.toHaveBeenCalled();
   });
 
   it("Upload scalar rejects inline literals in favor of variables", () => {

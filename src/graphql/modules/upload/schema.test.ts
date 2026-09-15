@@ -1,23 +1,12 @@
 import { afterEach, beforeAll, describe, expect, it, jest } from "@jest/globals";
 import { graphql, type GraphQLSchema } from "graphql";
 
-const mockRandomUUID = jest.fn<() => string>();
-const mockMkdir = jest.fn<(dir: string, opts: unknown) => Promise<void>>();
-const mockWriteFile = jest.fn<(file: string, data: Buffer) => Promise<void>>();
-const mockUnlink = jest.fn<(file: string) => Promise<void>>();
+const mockPut = jest.fn<(pathname: string, body: Buffer, opts: unknown) => Promise<{ url: string }>>();
+const mockDel = jest.fn<(url: string) => Promise<void>>();
 
-jest.unstable_mockModule("../../../config/env.js", () => ({
-  config: { uploadsDir: "/tmp/uploads" },
-}));
-
-jest.unstable_mockModule("node:crypto", () => ({
-  randomUUID: mockRandomUUID,
-}));
-
-jest.unstable_mockModule("node:fs/promises", () => ({
-  mkdir: mockMkdir,
-  writeFile: mockWriteFile,
-  unlink: mockUnlink,
+jest.unstable_mockModule("@vercel/blob", () => ({
+  put: mockPut,
+  del: mockDel,
 }));
 
 let uploadSchema: GraphQLSchema;
@@ -32,9 +21,7 @@ afterEach(() => {
 
 describe("uploadSchema", () => {
   it("resolves the uploadImage mutation end to end and returns the file's URL", async () => {
-    mockRandomUUID.mockReturnValue("uuid-1234");
-    mockMkdir.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+    mockPut.mockResolvedValue({ url: "https://blob.example.com/photo-abc123.png" });
 
     const file = {
       name: "photo.png",
@@ -54,52 +41,33 @@ describe("uploadSchema", () => {
     });
 
     expect(result.errors).toBeUndefined();
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      "/tmp/uploads/uuid-1234-photo.png",
-      Buffer.from(new TextEncoder().encode("data")),
-    );
-    expect(result.data?.uploadImage).toBe("/uploads/uuid-1234-photo.png");
+    expect(mockPut).toHaveBeenCalledWith("photo.png", Buffer.from(new TextEncoder().encode("data")), {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    expect(result.data?.uploadImage).toBe("https://blob.example.com/photo-abc123.png");
   });
 
   it("resolves the deleteImage mutation end to end", async () => {
-    mockUnlink.mockResolvedValue(undefined);
+    mockDel.mockResolvedValue(undefined);
 
     const result = await graphql({
       schema: uploadSchema,
       source: `
         mutation {
-          deleteImage(url: "/uploads/uuid-1234-photo.png")
+          deleteImage(url: "https://blob.example.com/photo-abc123.png")
         }
       `,
     });
 
     expect(result.errors).toBeUndefined();
-    expect(mockUnlink).toHaveBeenCalledWith("/tmp/uploads/uuid-1234-photo.png");
+    expect(mockDel).toHaveBeenCalledWith("https://blob.example.com/photo-abc123.png");
     expect(result.data?.deleteImage).toBe(true);
   });
 
-  it("resolves deleteImage to false when the file is already gone", async () => {
-    const enoent = Object.assign(new Error("not found"), { code: "ENOENT" });
-    mockUnlink.mockRejectedValue(enoent);
-
-    const result = await graphql({
-      schema: uploadSchema,
-      source: `
-        mutation {
-          deleteImage(url: "/uploads/missing.png")
-        }
-      `,
-    });
-
-    expect(result.errors).toBeUndefined();
-    expect(result.data?.deleteImage).toBe(false);
-  });
-
-  it("resolves the updateImage mutation end to end, deleting the old file and saving the new one", async () => {
-    mockUnlink.mockResolvedValue(undefined);
-    mockRandomUUID.mockReturnValue("uuid-9999");
-    mockMkdir.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
+  it("resolves the updateImage mutation end to end, deleting the old blob and saving the new one", async () => {
+    mockDel.mockResolvedValue(undefined);
+    mockPut.mockResolvedValue({ url: "https://blob.example.com/new-photo-xyz789.png" });
 
     const file = {
       name: "new-photo.png",
@@ -115,15 +83,16 @@ describe("uploadSchema", () => {
           updateImage(oldUrl: $oldUrl, file: $file)
         }
       `,
-      variableValues: { oldUrl: "/uploads/uuid-1234-old-photo.png", file },
+      variableValues: { oldUrl: "https://blob.example.com/old-photo-abc123.png", file },
     });
 
     expect(result.errors).toBeUndefined();
-    expect(mockUnlink).toHaveBeenCalledWith("/tmp/uploads/uuid-1234-old-photo.png");
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      "/tmp/uploads/uuid-9999-new-photo.png",
+    expect(mockDel).toHaveBeenCalledWith("https://blob.example.com/old-photo-abc123.png");
+    expect(mockPut).toHaveBeenCalledWith(
+      "new-photo.png",
       Buffer.from(new TextEncoder().encode("data")),
+      { access: "public", addRandomSuffix: true },
     );
-    expect(result.data?.updateImage).toBe("/uploads/uuid-9999-new-photo.png");
+    expect(result.data?.updateImage).toBe("https://blob.example.com/new-photo-xyz789.png");
   });
 });

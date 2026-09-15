@@ -1,10 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
-
+import { del, put } from "@vercel/blob";
 import { GraphQLScalarType } from "graphql";
-
-import { config } from "../../../config/env.js";
 
 interface UploadedFile {
   name: string;
@@ -24,26 +19,16 @@ const uploadScalar = new GraphQLScalarType({
 async function saveFile(file: UploadedFile): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer());
   const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-  const filename = `${randomUUID()}-${safeName}`;
 
-  await mkdir(config.uploadsDir, { recursive: true });
-  await writeFile(path.join(config.uploadsDir, filename), buffer);
+  const blob = await put(safeName, buffer, { access: "public", addRandomSuffix: true });
 
-  return `/uploads/${filename}`;
+  return blob.url;
 }
 
 async function removeFile(url: string): Promise<boolean> {
-  const filename = path.basename(url);
-
-  try {
-    await unlink(path.join(config.uploadsDir, filename));
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
+  // del() is idempotent: it resolves even if the blob is already gone.
+  await del(url);
+  return true;
 }
 
 export const uploadResolvers = {
